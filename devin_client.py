@@ -24,9 +24,14 @@ Step 1 - TRIAGE: Analyze the issue and post a comment on the GitHub issue at {is
 - Estimated complexity (simple/medium/complex)
 - Your planned fix approach
 
-Step 2 - FIX: Implement the fix in the codebase
+Step 2 - FIX: Implement the fix in the codebase.
 
-Step 3 - PR: Open a pull request referencing the issue with a clear description of what was changed and why
+Step 3 - VERIFY: Where it makes sense, add or update a test that proves the fix
+works, and run the relevant tests or checks to confirm nothing is broken.
+Briefly note in the PR what you ran to verify.
+
+Step 4 - PR: Open a pull request referencing the issue with a clear description
+of the root cause, what you changed, and how you verified it.
 """
     response = requests.post(
         f"https://api.devin.ai/v3/organizations/{org_id}/sessions",
@@ -50,7 +55,13 @@ def poll_session(session_id, timeout=900):
         data = response.json()
         status = data.get("status", "unknown")
         print(f"  [{i*20}s] Status: {status}")
-        if status in ("completed", "failed", "stopped"):
+        if status in ("completed", "failed", "stopped", "finished"):
+            # Pull the real PR URL out of the response if Devin opened one
+            pr_url = None
+            prs = data.get("pull_requests") or []
+            if prs:
+                pr_url = prs[0].get("pr_url")
+            data["pr_url"] = pr_url
             return data
         time.sleep(20)
-    return {"status": "timeout", "session_id": session_id}
+    return {"status": "timeout", "session_id": session_id, "pr_url": None}
