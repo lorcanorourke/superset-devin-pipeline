@@ -1,47 +1,71 @@
 import os, json, datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from github import Github
 from devin_client import create_session, poll_session
 from dotenv import load_dotenv
 
 load_dotenv()
 
+def process_issue(issue_data):
+    """Handle one issue end to end - runs in its own thread."""
+    issue_number = issue_data["number"]
+    issue_title = issue_data["title"]
+    issue_url = issue_data["url"]
+    repo_full = os.environ["GITHUB_REPO"]
+
+    print(f"[START] Issue #{issue_number}: {issue_title}")
+
+    session_id = create_session(
+        issue_title=issue_title,
+        issue_url=issue_url,
+        repo_url=f"https://github.com/{repo_full}"
+    )
+
+    result = poll_session(session_id)
+    status = result.get("status")
+
+    print(f"[DONE] Issue #{issue_number}: {status}")
+
+    return {
+        "issue_number": issue_number,
+        "issue_title": issue_title,
+        "session_id": session_id,
+        "status": status,
+        "timestamp": datetime.datetime.utcnow().isoformat()
+    }
+
 def run_automation():
     g = Github(os.environ["GITHUB_TOKEN"])
     repo = g.get_repo(os.environ["GITHUB_REPO"])
-    
+
     issues = list(repo.get_issues(labels=["devin-task"], state="open"))
-    print(f"Found {len(issues)} issues to remediate")
-    
+    print(f"Found {len(issues)} issues to remediate\n")
+    print(f"Spinning up {len(issues)} Devin sessions in parallel...\n")
+
+    # Prepare issue data (PyGithub objects aren't thread-safe, so extract first)
+    issue_data_list = [
+        {"number": i.number, "title": i.title, "url": i.html_url}
+        for i in issues
+    ]
+
     results = []
-    
-    for issue in issues:
-        print(f"\n--- Processing: {issue.title} ---")
-        
-        session_id = create_session(
-            issue_title=issue.title,
-            issue_url=issue.html_url,
-            repo_url=f"https://github.com/{os.environ['GITHUB_REPO']}"
-        )
-        
-        result = poll_session(session_id)
-        
-        entry = {
-            "issue_number": issue.number,
-            "issue_title": issue.title,
-            "session_id": session_id,
-            "status": result.get("status"),
-            "timestamp": datetime.datetime.utcnow().isoformat()
-        }
-        results.append(entry)
-        
-        status_emoji = "✅" if result.get("status") == "completed" else "❌"
+    # Run all issues concurrently
+    with ThreadPoolExecutor(max_workers=len(issue_data_list) or 1) as executor:
+        futures = {executor.submit(process_issue, d): d for d in issue_data_list}
+        for future in as_completed(futures):
+            results.append(future.result())
+
+    # Post status comments after all complete (sequential, GitHub API is fine here)
+    for r in results:
+        issue = repo.get_issue(r["issue_number"])
+        status_emoji = "✅" if r["status"] == "completed" else "❌"
         issue.create_comment(
             f"{status_emoji} **Devin automation update**\n\n"
-            f"Session ID: `{session_id}`\n"
-            f"Status: **{result.get('status')}**\n"
-            f"View session: https://app.devin.ai/sessions/{session_id}"
+            f"Session ID: `{r['session_id']}`\n"
+            f"Status: **{r['status']}**\n"
+            f"View session: https://app.devin.ai/sessions/{r['session_id']}"
         )
-    
+
     return results
 
 def write_github_summary(results):
