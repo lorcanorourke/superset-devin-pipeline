@@ -44,12 +44,36 @@ def run_automation():
     
     return results
 
+def write_github_summary(results):
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    total = len(results)
+    completed = sum(1 for r in results if r["status"] == "completed")
+    failed = total - completed
+    rate = f"{round(completed/total*100)}%" if total else "N/A"
+    with open(summary_path, "a") as f:
+        f.write("# Devin Remediation Report\n\n")
+        f.write(f"**Total tasks:** {total}  \n")
+        f.write(f"**Completed:** {completed}  \n")
+        f.write(f"**Failed:** {failed}  \n")
+        f.write(f"**Success rate:** {rate}\n\n")
+        f.write("| Issue | Title | Status | Session |\n")
+        f.write("|-------|-------|--------|--------|\n")
+        for r in results:
+            f.write(
+                f"| #{r['issue_number']} | {r['issue_title']} | {r['status']} | "
+                f"[view](https://app.devin.ai/sessions/{r['session_id']}) |\n"
+            )
+
 if __name__ == "__main__":
     results = run_automation()
-    
+
     with open("report.json", "w") as f:
         json.dump(results, f, indent=2)
-    
+
+    write_github_summary(results)
+
     total = len(results)
     completed = sum(1 for r in results if r["status"] == "completed")
     print(f"\n=== SUMMARY ===")
